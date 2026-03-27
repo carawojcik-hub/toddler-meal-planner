@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Lock, Pencil, RefreshCw, Unlock, X } from "lucide-react";
+import { supabase, supabaseConfigured } from "./supabaseClient.js";
 
 /** Week runs Sunday → Saturday (calendar-aligned). */
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -243,16 +244,12 @@ function mergeInventoryForCatalog(catalog, persistedInventory) {
   );
 }
 
-function loadUserPoolFromStorage() {
-  let parsed = null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_USER_POOL);
-    if (raw) parsed = JSON.parse(raw);
-  } catch {
-    /* ignore */
-  }
+/** Build pool state from persisted JSON (localStorage shape or Supabase `user_pool`). */
+function mergeUserPoolFromPersisted(parsed) {
+  let p = parsed;
+  if (!p || typeof p !== "object") p = {};
   const defaultIds = DEFAULT_CATALOG_IDS();
-  const rawExtra = Array.isArray(parsed?.catalogExtra) ? parsed.catalogExtra : [];
+  const rawExtra = Array.isArray(p.catalogExtra) ? p.catalogExtra : [];
   const catalogExtra = rawExtra
     .filter((c) => c && typeof c.id === "string" && !defaultIds.has(c.id))
     .map((c) => ({
@@ -260,17 +257,43 @@ function loadUserPoolFromStorage() {
       category: normalizeFoodCategory(c.category),
     }));
   const catalog = [...DEFAULT_CATALOG, ...catalogExtra];
-  const inventory = mergeInventoryForCatalog(catalog, parsed?.inventory);
+  const inventory = mergeInventoryForCatalog(catalog, p.inventory);
   const history = {
     ...DEFAULT_HISTORY,
-    ...(parsed?.history && typeof parsed.history === "object" ? parsed.history : {}),
+    ...(p.history && typeof p.history === "object" ? p.history : {}),
   };
   const catalogIdSet = new Set(catalog.map((c) => c.id));
   const selectedIds =
-    Array.isArray(parsed?.selectedIds) && parsed.selectedIds.length > 0
-      ? [...new Set(parsed.selectedIds.filter((id) => catalogIdSet.has(id)))]
+    Array.isArray(p.selectedIds) && p.selectedIds.length > 0
+      ? [...new Set(p.selectedIds.filter((id) => catalogIdSet.has(id)))]
       : DEFAULT_INVENTORY.map((i) => i.itemId);
   return { catalog, inventory, history, selectedIds };
+}
+
+function loadUserPoolFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_USER_POOL);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return mergeUserPoolFromPersisted(parsed);
+  } catch {
+    return mergeUserPoolFromPersisted(null);
+  }
+}
+
+function readLocalStoragePlannerSeed() {
+  let userPool = {};
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_USER_POOL);
+    if (raw) userPool = JSON.parse(raw);
+  } catch {
+    /* ignore */
+  }
+  return {
+    savedWeeks: loadSavedWeeksFromStorage(),
+    userPool,
+    breakfastStapleIds: loadBreakfastStaplesFromStorage(),
+    mealFitOverrides: loadMealFitOverridesFromStorage(),
+  };
 }
 
 let cachedInitialPool = null;
@@ -536,6 +559,62 @@ const styles = {
     gap: "12px",
     marginBottom: "12px",
     flexWrap: "wrap",
+  },
+  topBarUser: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    flexWrap: "wrap",
+    fontSize: "13px",
+    color: "#64748b",
+  },
+  authPanel: {
+    maxWidth: "400px",
+    margin: "48px auto",
+    padding: "28px",
+    background: "white",
+    borderRadius: "20px",
+    border: "1px solid #e2e8f0",
+    boxShadow: "0 10px 40px -15px rgba(15, 23, 42, 0.2)",
+  },
+  authTitle: {
+    margin: "0 0 8px",
+    fontSize: "22px",
+    fontWeight: 700,
+  },
+  authSubtitle: {
+    margin: "0 0 20px",
+    fontSize: "14px",
+    color: "#64748b",
+    lineHeight: 1.5,
+  },
+  authLabel: {
+    display: "block",
+    fontSize: "12px",
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: "6px",
+  },
+  authInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #cbd5e1",
+    borderRadius: "12px",
+    padding: "10px 12px",
+    fontSize: "15px",
+    marginBottom: "14px",
+  },
+  authError: {
+    fontSize: "13px",
+    color: "#b91c1c",
+    marginBottom: "12px",
+  },
+  authRow: {
+    display: "flex",
+    gap: "10px",
+    flexWrap: "wrap",
+    alignItems: "center",
+    marginTop: "8px",
   },
   weekNav: {
     display: "flex",
@@ -1041,6 +1120,16 @@ export default function ToddlerMenuPlannerPrototype() {
   });
   const [activeTab, setActiveTab] = useState("planner");
 
+  const [session, setSession] = useState(null);
+  const [authReady, setAuthReady] = useState(!supabaseConfigured);
+  const [cloudSyncReady, setCloudSyncReady] = useState(!supabaseConfigured);
+  const [authMode, setAuthMode] = useState("signin");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authFormError, setAuthFormError] = useState("");
+  const [cloudLoadError, setCloudLoadError] = useState("");
+
   const persistCurrentWeekSnapshot = useCallback(() => {
     setSavedWeeks((prev) => ({
       ...prev,
@@ -1103,6 +1192,188 @@ export default function ToddlerMenuPlannerPrototype() {
       mealFitOverrides,
     ]
   );
+
+  useEffect(() => {
+    if (!supabaseConfigured || !supabase) return;
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      setAuthReady(true);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!supabaseConfigured || !supabase) return;
+    if (!session?.user) {
+      setCloudSyncReady(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setCloudSyncReady(false);
+      setCloudLoadError("");
+      const thisCal = formatLocalDateKey(startOfWeekSunday(new Date()));
+      try {
+        const { data, error } = await supabase
+          .from("planner_state")
+          .select("*")
+          .eq("user_id", session.user.id)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) throw error;
+
+        if (!data) {
+          const seed = readLocalStoragePlannerSeed();
+          const pool = mergeUserPoolFromPersisted(seed.userPool);
+          const savedWeeksSeed =
+            seed.savedWeeks && typeof seed.savedWeeks === "object" ? seed.savedWeeks : {};
+          let activeKey = savedWeeksSeed[thisCal]
+            ? thisCal
+            : Object.keys(savedWeeksSeed).sort().pop() || thisCal;
+          const entry = savedWeeksSeed[activeKey];
+          const newWeekPlan =
+            entry?.weekPlan?.length === DAYS.length
+              ? entry.weekPlan
+              : createWeeklyPlan({
+                  selectedIds: pool.selectedIds,
+                  catalog: pool.catalog,
+                  inventory: pool.inventory,
+                  history: pool.history,
+                  priorityBoost: {},
+                  breakfastStapleIds: seed.breakfastStapleIds ?? [],
+                  mealFitOverrides: seed.mealFitOverrides ?? {},
+                });
+          const defaultIds = DEFAULT_CATALOG_IDS();
+          const catalogExtra = pool.catalog.filter((c) => !defaultIds.has(c.id));
+          const insertPayload = {
+            user_id: session.user.id,
+            saved_weeks: savedWeeksSeed,
+            user_pool: {
+              catalogExtra,
+              inventory: pool.inventory,
+              history: pool.history,
+              selectedIds: pool.selectedIds,
+            },
+            breakfast_staple_ids: seed.breakfastStapleIds ?? [],
+            meal_fit_overrides: seed.mealFitOverrides ?? {},
+            priority_boost: {},
+            active_week_start_key: activeKey,
+            updated_at: new Date().toISOString(),
+          };
+          const { error: insErr } = await supabase
+            .from("planner_state")
+            .upsert(insertPayload, { onConflict: "user_id" });
+          if (insErr) throw insErr;
+          if (cancelled) return;
+          setCatalog(pool.catalog);
+          setInventory(pool.inventory);
+          setHistory(pool.history);
+          setSelectedIds(pool.selectedIds);
+          setSavedWeeks(savedWeeksSeed);
+          setBreakfastStapleIds(seed.breakfastStapleIds ?? []);
+          setMealFitOverrides(seed.mealFitOverrides ?? {});
+          setPriorityBoost({});
+          setActiveWeekStartKey(activeKey);
+          setWeekPlan(newWeekPlan);
+          setSuccessNote(entry?.reflectionNote ?? "");
+        } else {
+          const pool = mergeUserPoolFromPersisted(data.user_pool);
+          const sw = data.saved_weeks && typeof data.saved_weeks === "object" ? data.saved_weeks : {};
+          let activeKey =
+            typeof data.active_week_start_key === "string" ? data.active_week_start_key : thisCal;
+          if (!sw[activeKey]) {
+            activeKey = sw[thisCal] ? thisCal : Object.keys(sw).sort().pop() || thisCal;
+          }
+          const entry = sw[activeKey];
+          const prio =
+            data.priority_boost && typeof data.priority_boost === "object" ? data.priority_boost : {};
+          const staples = Array.isArray(data.breakfast_staple_ids) ? data.breakfast_staple_ids : [];
+          const mealFit =
+            data.meal_fit_overrides && typeof data.meal_fit_overrides === "object"
+              ? data.meal_fit_overrides
+              : {};
+          const newWeekPlan =
+            entry?.weekPlan?.length === DAYS.length
+              ? entry.weekPlan
+              : createWeeklyPlan({
+                  selectedIds: pool.selectedIds,
+                  catalog: pool.catalog,
+                  inventory: pool.inventory,
+                  history: pool.history,
+                  priorityBoost: prio,
+                  breakfastStapleIds: staples,
+                  mealFitOverrides: mealFit,
+                });
+          if (cancelled) return;
+          setCatalog(pool.catalog);
+          setInventory(pool.inventory);
+          setHistory(pool.history);
+          setSelectedIds(pool.selectedIds);
+          setSavedWeeks(sw);
+          setBreakfastStapleIds(staples);
+          setMealFitOverrides(mealFit);
+          setPriorityBoost(prio);
+          setActiveWeekStartKey(activeKey);
+          setWeekPlan(newWeekPlan);
+          setSuccessNote(entry?.reflectionNote ?? "");
+        }
+        if (!cancelled) setCloudSyncReady(true);
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setCloudLoadError(e.message ?? String(e));
+          setCloudSyncReady(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when Supabase user id changes
+  }, [session?.user?.id]);
+
+  useEffect(() => {
+    if (!supabaseConfigured || !supabase || !session?.user || !cloudSyncReady) return;
+    const t = window.setTimeout(() => {
+      const defaultIds = DEFAULT_CATALOG_IDS();
+      const catalogExtra = catalog.filter((c) => !defaultIds.has(c.id));
+      supabase
+        .from("planner_state")
+        .upsert(
+          {
+            user_id: session.user.id,
+            saved_weeks: savedWeeks,
+            user_pool: { catalogExtra, inventory, history, selectedIds },
+            breakfast_staple_ids: breakfastStapleIds,
+            meal_fit_overrides: mealFitOverrides,
+            priority_boost: priorityBoost,
+            active_week_start_key: activeWeekStartKey,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "user_id" }
+        )
+        .then(({ error }) => {
+          if (error) console.error(error);
+        });
+    }, 800);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- upsert keyed by session.user.id
+  }, [
+    session?.user?.id,
+    cloudSyncReady,
+    savedWeeks,
+    catalog,
+    inventory,
+    history,
+    selectedIds,
+    breakfastStapleIds,
+    mealFitOverrides,
+    priorityBoost,
+    activeWeekStartKey,
+  ]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -1413,6 +1684,117 @@ export default function ToddlerMenuPlannerPrototype() {
     persistCurrentWeekSnapshot();
   };
 
+  const submitAuth = async () => {
+    if (!supabase) return;
+    setAuthFormError("");
+    const email = authEmail.trim();
+    const password = authPassword;
+    if (!email || !password) {
+      setAuthFormError("Enter email and password.");
+      return;
+    }
+    setAuthBusy(true);
+    try {
+      if (authMode === "signup") {
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      }
+    } catch (e) {
+      setAuthFormError(e.message ?? String(e));
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signOutCloud = async () => {
+    if (!supabase) return;
+    setAuthFormError("");
+    setCloudLoadError("");
+    await supabase.auth.signOut();
+  };
+
+  if (supabaseConfigured && authReady && !session) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.container}>
+          <div style={styles.authPanel}>
+            <h1 style={styles.authTitle}>Toddler menu planner</h1>
+            <p style={styles.authSubtitle}>
+              Sign in with your shared household email. First time? Choose <strong>Create account</strong>, then sign in
+              on other devices with the same email and password.
+            </p>
+            <div style={styles.authRow}>
+              <button
+                type="button"
+                style={authMode === "signin" ? styles.tabActive : styles.tab}
+                onClick={() => {
+                  setAuthMode("signin");
+                  setAuthFormError("");
+                }}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                style={authMode === "signup" ? styles.tabActive : styles.tab}
+                onClick={() => {
+                  setAuthMode("signup");
+                  setAuthFormError("");
+                }}
+              >
+                Create account
+              </button>
+            </div>
+            <label style={styles.authLabel} htmlFor="auth-email">
+              Email
+            </label>
+            <input
+              id="auth-email"
+              type="email"
+              autoComplete="username"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              style={styles.authInput}
+            />
+            <label style={styles.authLabel} htmlFor="auth-password">
+              Password
+            </label>
+            <input
+              id="auth-password"
+              type="password"
+              autoComplete={authMode === "signup" ? "new-password" : "current-password"}
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              style={styles.authInput}
+            />
+            {authFormError ? <p style={styles.authError}>{authFormError}</p> : null}
+            <button
+              type="button"
+              style={{ ...styles.buttonPrimary, width: "100%", marginTop: "8px" }}
+              onClick={submitAuth}
+              disabled={authBusy}
+            >
+              {authBusy ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (supabaseConfigured && session && !cloudSyncReady) {
+    return (
+      <div style={styles.page}>
+        <p style={{ textAlign: "center", padding: "48px", color: "#64748b", fontSize: "16px" }}>
+          Loading your planner…
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.container}>
@@ -1422,10 +1804,26 @@ export default function ToddlerMenuPlannerPrototype() {
             <TabButton active={activeTab === "history"} onClick={() => setActiveTab("history")}>History</TabButton>
             <TabButton active={activeTab === "logic"} onClick={() => setActiveTab("logic")}>Scoring</TabButton>
           </div>
-          <button type="button" onClick={generateWeek} style={styles.buttonPrimary}>
-            Generate week
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            {supabaseConfigured && session ? (
+              <div style={styles.topBarUser}>
+                <span>{session.user.email}</span>
+                <button type="button" style={styles.button} onClick={signOutCloud}>
+                  Sign out
+                </button>
+              </div>
+            ) : null}
+            <button type="button" onClick={generateWeek} style={styles.buttonPrimary}>
+              Generate week
+            </button>
+          </div>
         </div>
+
+        {cloudLoadError ? (
+          <p style={{ ...styles.authError, margin: "0 0 12px", padding: "0 4px" }}>
+            Cloud sync error: {cloudLoadError}
+          </p>
+        ) : null}
 
         {activeTab === "planner" && (
           <div style={styles.grid}>
@@ -1468,8 +1866,10 @@ export default function ToddlerMenuPlannerPrototype() {
                 <strong>Lunch &amp; dinner</strong> pick ~4 foods each and try to include{" "}
                 <strong>one fruit or veg</strong>, <strong>one grain</strong>, and <strong>one protein or dairy</strong> before
                 filling the rest (or if a bucket is missing from your pool). Up to <strong>{MAX_FOODS_PER_CELL} per cell</strong>.
-                Lock a cell (padlock) to keep it when you <strong>Generate week</strong> or tap <strong>Refresh</strong>. Plans save
-                in your browser.
+                Lock a cell (padlock) to keep it when you <strong>Generate week</strong> or tap <strong>Refresh</strong>.
+                {supabaseConfigured && session
+                  ? " Your plan syncs to your account (this device also keeps a local copy)."
+                  : " Plans save in your browser."}
               </p>
               <div style={styles.menuMatrixWrap}>
                 <div style={styles.menuMatrix} role="grid" aria-label="Weekly meal matrix">
@@ -1563,8 +1963,11 @@ export default function ToddlerMenuPlannerPrototype() {
               <p style={{ ...styles.smallText, marginTop: "-8px", marginBottom: "16px" }}>
                 Each food has exactly one category (Fruits, Vegetables, Grains, Protein, Dairy, Sweets, Misc.). New foods
                 need a category before you add. <strong>Foods you add</strong>, this week&apos;s chip selection, inventory
-                rows, and &quot;last served&quot; values are saved in this browser (same as weeks below). Tap chips to
-                include or exclude from this week; use − / + for planner priority.
+                rows, and &quot;last served&quot; values{" "}
+                {supabaseConfigured && session
+                  ? "sync to your account when signed in (this browser still saves a local copy)."
+                  : "are saved in this browser (same as weeks below)."}{" "}
+                Tap chips to include or exclude from this week; use − / + for planner priority.
               </p>
 
               <p style={styles.sectionLabel}>Breakfast staples (same lineup every day)</p>
@@ -1808,7 +2211,10 @@ export default function ToddlerMenuPlannerPrototype() {
           <div style={styles.card}>
             <h2 style={styles.cardTitle}>Past weeks</h2>
             <p style={{ ...styles.smallText, marginTop: "-8px", marginBottom: "16px" }}>
-              Each week is keyed by its starting Sunday. Data is stored only in this browser (localStorage).
+                Each week is keyed by its starting Sunday.
+                {supabaseConfigured && session
+                  ? " Signed-in data is stored in your Supabase project and synced across devices; this browser also caches a copy."
+                  : " Data is stored only in this browser (localStorage)."}
             </p>
             {savedWeekKeysSorted.length === 0 ? (
               <p style={styles.smallText}>No saved weeks yet. Use the planner and your week will be stored automatically.</p>
