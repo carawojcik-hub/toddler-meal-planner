@@ -129,6 +129,16 @@ function normalizeFoodCategory(categoryId) {
   return FOOD_CATEGORY_IDS.includes(categoryId) ? categoryId : "misc";
 }
 
+/** FOOD_CATEGORIES order; omits categories with no items. */
+function groupCatalogByCategoryOrdered(items) {
+  const byId = Object.fromEntries(FOOD_CATEGORY_IDS.map((id) => [id, []]));
+  for (const item of items) {
+    const cat = normalizeFoodCategory(item.category);
+    (byId[cat] ?? byId.misc).push(item);
+  }
+  return FOOD_CATEGORIES.map((c) => ({ category: c, items: byId[c.id] })).filter((col) => col.items.length > 0);
+}
+
 /** Lunch/dinner: aim for produce + grain + (protein or dairy); sweets/misc fill only after anchors or if a bucket is missing. */
 function macroBucketForFood(item) {
   const c = normalizeFoodCategory(item.category);
@@ -296,6 +306,16 @@ function readLocalStoragePlannerSeed() {
   };
 }
 
+/** Checked foods first (in checkbox order), then the rest of the pool. */
+function catalogOrderedForOverrideModal(selectedCatalog, manualFoodIds) {
+  const pickedSet = new Set(manualFoodIds);
+  const pickedOrdered = manualFoodIds
+    .map((id) => selectedCatalog.find((c) => c.id === id))
+    .filter(Boolean);
+  const rest = selectedCatalog.filter((c) => !pickedSet.has(c.id));
+  return [...pickedOrdered, ...rest];
+}
+
 let cachedInitialPool = null;
 function initialPoolState() {
   if (!cachedInitialPool) cachedInitialPool = loadUserPoolFromStorage();
@@ -318,6 +338,28 @@ function scoreFood(catalogItem, inventoryItem, daysSinceServed) {
 function buildMealLabel(selectedCatalogItems) {
   if (selectedCatalogItems.length === 0) return "No foods selected";
   return selectedCatalogItems.map((i) => i.name).join(" · ");
+}
+
+function slugIdFromFoodName(rawName) {
+  return rawName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
+/** Remap ids in slots and rebuild labels from `catalogAfter` (name/category changes). */
+function remapWeekPlanFoodIdsAndLabels(weekPlan, idMap, catalogAfter) {
+  const remap = Object.keys(idMap).length > 0;
+  return weekPlan.map((row) => ({
+    ...row,
+    meals: Object.fromEntries(
+      MEALS.map((meal) => {
+        const slot = row.meals[meal];
+        let foodIds = [...(slot.foodIds ?? [])];
+        if (remap) foodIds = foodIds.map((id) => idMap[id] ?? id);
+        const items = foodIds.map((id) => catalogAfter.find((c) => c.id === id)).filter(Boolean);
+        const label = items.length ? buildMealLabel(items) : slot.label;
+        return [meal, { ...slot, foodIds, label }];
+      })
+    ),
+  }));
 }
 
 function mealSlotTargetCount(meal, dayIndex) {
@@ -540,10 +582,10 @@ function regenerateSlot(
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "#f8fafc",
+    background: "var(--color-neutral-50)",
     padding: "16px 0",
-    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-    color: "#0f172a",
+    fontFamily: "var(--font-body), ui-sans-serif, system-ui, sans-serif",
+    color: "var(--color-default-font)",
   },
   container: {
     width: "100%",
@@ -566,47 +608,51 @@ const styles = {
     gap: "10px",
     flexWrap: "wrap",
     fontSize: "13px",
-    color: "#64748b",
+    color: "var(--color-subtext-color)",
   },
   authPanel: {
     maxWidth: "400px",
     margin: "48px auto",
     padding: "28px",
-    background: "white",
+    background: "var(--color-neutral-0)",
     borderRadius: "20px",
-    border: "1px solid #e2e8f0",
-    boxShadow: "0 10px 40px -15px rgba(15, 23, 42, 0.2)",
+    border: "1px solid var(--color-neutral-200)",
+    boxShadow: "var(--shadow-tm-lg)",
   },
   authTitle: {
     margin: "0 0 8px",
     fontSize: "22px",
-    fontWeight: 700,
+    fontWeight: 600,
+    fontFamily: "var(--font-heading-2), ui-sans-serif, system-ui, sans-serif",
+    color: "var(--color-default-font)",
+    letterSpacing: "-0.02em",
   },
   authSubtitle: {
     margin: "0 0 20px",
     fontSize: "14px",
-    color: "#64748b",
+    color: "var(--color-subtext-color)",
     lineHeight: 1.5,
   },
   authLabel: {
     display: "block",
     fontSize: "12px",
     fontWeight: 600,
-    color: "#475569",
+    color: "var(--color-neutral-600)",
     marginBottom: "6px",
   },
   authInput: {
     width: "100%",
     boxSizing: "border-box",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--color-neutral-300)",
     borderRadius: "12px",
     padding: "10px 12px",
     fontSize: "15px",
     marginBottom: "14px",
+    color: "var(--color-default-font)",
   },
   authError: {
     fontSize: "13px",
-    color: "#b91c1c",
+    color: "var(--color-error-600)",
     marginBottom: "12px",
   },
   authRow: {
@@ -623,40 +669,39 @@ const styles = {
     flexWrap: "wrap",
     marginBottom: "12px",
   },
-  weekNavLabel: {
-    fontSize: "14px",
-    fontWeight: 600,
-    color: "#0f172a",
-    flex: "1 1 200px",
-    textAlign: "center",
-  },
   weekNavBtn: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "10px",
     padding: "6px 12px",
     cursor: "pointer",
     fontSize: "13px",
+    color: "var(--color-default-font)",
+  },
+  weekNavBtnActive: {
+    border: "1px solid var(--color-brand-700)",
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
   },
   matrixRowDate: {
     display: "block",
     fontSize: "10px",
     fontWeight: 500,
-    color: "#64748b",
+    color: "var(--color-subtext-color)",
     marginTop: "4px",
   },
   button: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "14px",
     padding: "10px 14px",
     cursor: "pointer",
     fontSize: "14px",
   },
   buttonPrimary: {
-    border: "1px solid #0f172a",
-    background: "#0f172a",
-    color: "white",
+    border: "1px solid var(--color-brand-700)",
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
     borderRadius: "14px",
     padding: "10px 14px",
     cursor: "pointer",
@@ -668,17 +713,17 @@ const styles = {
     flexWrap: "wrap",
   },
   tab: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "999px",
     padding: "8px 14px",
     cursor: "pointer",
     fontSize: "14px",
   },
   tabActive: {
-    border: "1px solid #0f172a",
-    background: "#0f172a",
-    color: "white",
+    border: "1px solid var(--color-brand-700)",
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
     borderRadius: "999px",
     padding: "8px 14px",
     cursor: "pointer",
@@ -697,36 +742,36 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "minmax(52px, 72px) repeat(3, minmax(0, 1fr))",
     gap: "1px",
-    background: "#e2e8f0",
-    border: "1px solid #e2e8f0",
+    background: "var(--color-neutral-200)",
+    border: "1px solid var(--color-neutral-200)",
     borderRadius: "16px",
     overflow: "hidden",
     width: "100%",
   },
   matrixCorner: {
-    background: "#f1f5f9",
+    background: "var(--color-neutral-100)",
     padding: "8px 6px",
     fontSize: "10px",
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
-    color: "#64748b",
+    color: "var(--color-subtext-color)",
     textAlign: "center",
   },
   matrixColHead: {
-    background: "#f1f5f9",
+    background: "var(--color-neutral-100)",
     padding: "10px 12px",
     fontSize: "13px",
     fontWeight: 700,
-    color: "#0f172a",
+    color: "var(--color-default-font)",
     textAlign: "center",
   },
   matrixRowHead: {
-    background: "#f8fafc",
+    background: "var(--color-neutral-50)",
     padding: "8px 6px",
     fontSize: "11px",
     fontWeight: 600,
-    color: "#0f172a",
+    color: "var(--color-default-font)",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -737,7 +782,7 @@ const styles = {
     overflowWrap: "break-word",
   },
   matrixCell: {
-    background: "white",
+    background: "var(--color-neutral-0)",
     padding: "10px 12px",
     minHeight: "120px",
     display: "flex",
@@ -758,15 +803,15 @@ const styles = {
     fontSize: "12px",
     lineHeight: 1.35,
     fontWeight: 500,
-    color: "#0f172a",
+    color: "var(--color-default-font)",
     padding: "4px 8px",
-    background: "#f8fafc",
+    background: "var(--color-neutral-50)",
     borderRadius: "8px",
-    border: "1px solid #e2e8f0",
+    border: "1px solid var(--color-neutral-200)",
   },
   matrixFoodEmpty: {
     fontSize: "12px",
-    color: "#94a3b8",
+    color: "var(--color-neutral-400)",
     fontStyle: "italic",
     margin: 0,
   },
@@ -784,8 +829,8 @@ const styles = {
     alignItems: "center",
   },
   matrixIconBtn: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "8px",
     width: "32px",
     height: "32px",
@@ -794,7 +839,7 @@ const styles = {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#475569",
+    color: "var(--color-neutral-600)",
     flexShrink: 0,
   },
   matrixIconBtnMuted: {
@@ -813,22 +858,22 @@ const styles = {
     boxSizing: "border-box",
   },
   modalPanel: {
-    background: "white",
+    background: "var(--color-neutral-0)",
     borderRadius: "20px",
     maxWidth: "480px",
     width: "100%",
-    boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+    boxShadow: "var(--shadow-tm-lg)",
     padding: "22px",
     position: "relative",
   },
   modalFoodList: {
     maxHeight: "min(50vh, 320px)",
     overflowY: "auto",
-    border: "1px solid #e2e8f0",
+    border: "1px solid var(--color-neutral-200)",
     borderRadius: "14px",
     padding: "8px",
     marginBottom: "16px",
-    background: "#fafafa",
+    background: "var(--color-neutral-50)",
   },
   modalFoodRow: {
     display: "flex",
@@ -838,7 +883,7 @@ const styles = {
     borderRadius: "10px",
     cursor: "pointer",
     fontSize: "14px",
-    color: "#0f172a",
+    color: "var(--color-default-font)",
   },
   modalFoodRowDisabled: {
     opacity: 0.45,
@@ -848,13 +893,14 @@ const styles = {
     margin: "0 0 6px",
     fontSize: "18px",
     fontWeight: 600,
-    color: "#0f172a",
+    fontFamily: "var(--font-heading-3), ui-sans-serif, system-ui, sans-serif",
+    color: "var(--color-default-font)",
     paddingRight: "36px",
   },
   modalSubtitle: {
     margin: "0 0 16px",
     fontSize: "14px",
-    color: "#64748b",
+    color: "var(--color-subtext-color)",
     lineHeight: 1.4,
   },
   modalCloseBtn: {
@@ -864,48 +910,97 @@ const styles = {
     width: "36px",
     height: "36px",
     border: "none",
-    background: "#f1f5f9",
+    background: "var(--color-neutral-100)",
     borderRadius: "10px",
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#475569",
+    color: "var(--color-neutral-600)",
   },
-  chipWithPriority: {
+  chipPill: {
     display: "inline-flex",
-    alignItems: "center",
-    gap: "4px",
-    flexWrap: "wrap",
+    alignItems: "stretch",
+    width: "max-content",
+    maxWidth: "100%",
+    boxSizing: "border-box",
+    borderRadius: "999px",
+    border: "1px solid var(--color-neutral-300)",
+    overflow: "hidden",
+    fontSize: "14px",
   },
-  priorityBtn: {
-    border: "1px solid #cbd5e1",
-    background: "#f8fafc",
-    borderRadius: "8px",
-    width: "28px",
-    height: "28px",
-    padding: 0,
+  chipPillInPool: {
+    borderColor: "var(--color-brand-700)",
+  },
+  chipPillEnd: {
+    border: "none",
+    margin: 0,
+    padding: "0 12px",
     cursor: "pointer",
-    fontSize: "16px",
+    background: "var(--color-neutral-0)",
+    color: "var(--color-default-font)",
+    fontSize: "17px",
     lineHeight: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
     flexShrink: 0,
   },
-  priorityBadge: {
-    fontSize: "11px",
-    color: "#64748b",
-    minWidth: "22px",
-    textAlign: "center",
+  chipPillEndInPool: {
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
+  },
+  chipPillCenter: {
+    border: "none",
+    borderLeft: "1px solid var(--color-neutral-200)",
+    borderRight: "1px solid var(--color-neutral-200)",
+    margin: 0,
+    padding: "8px 12px",
+    cursor: "pointer",
+    background: "var(--color-neutral-0)",
+    color: "var(--color-default-font)",
+    fontSize: "14px",
+    display: "flex",
+    alignItems: "center",
+    gap: "4px",
+    textAlign: "left",
+    whiteSpace: "nowrap",
+    minWidth: 0,
+    maxWidth: "100%",
+  },
+  chipPillCenterLabel: {
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  chipPillCenterInPool: {
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
+    borderLeftColor: "rgba(255, 255, 255, 0.25)",
+    borderRightColor: "rgba(255, 255, 255, 0.25)",
+  },
+  chipPillPriorityHint: {
+    fontSize: "12px",
+    fontWeight: 600,
+    opacity: 0.88,
+    flexShrink: 0,
   },
   card: {
-    background: "white",
+    background: "var(--color-neutral-0)",
     borderRadius: "24px",
     padding: "20px",
-    boxShadow: "0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 30px rgba(15, 23, 42, 0.04)",
+    border: "1px solid var(--color-neutral-border)",
+    boxShadow: "var(--shadow-tm-md)",
   },
   cardTitle: {
     marginTop: 0,
     marginBottom: "16px",
     fontSize: "20px",
+    fontWeight: 600,
+    fontFamily: "var(--font-heading-2), ui-sans-serif, system-ui, sans-serif",
+    color: "var(--color-default-font)",
+    letterSpacing: "-0.02em",
+    lineHeight: 1.25,
   },
   inputRow: {
     display: "flex",
@@ -914,33 +1009,25 @@ const styles = {
   },
   input: {
     width: "100%",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--color-neutral-300)",
     borderRadius: "14px",
     padding: "10px 12px",
     fontSize: "14px",
-  },
-  dashedBox: {
-    border: "1px dashed #cbd5e1",
-    borderRadius: "18px",
-    minHeight: "72px",
-    padding: "12px",
-    display: "flex",
-    flexWrap: "wrap",
-    gap: "8px",
-    marginBottom: "16px",
+    color: "var(--color-default-font)",
+    background: "var(--color-neutral-0)",
   },
   chip: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "999px",
     padding: "8px 12px",
     cursor: "pointer",
     fontSize: "14px",
   },
   chipSelected: {
-    border: "1px solid #0f172a",
-    background: "#0f172a",
-    color: "white",
+    border: "1px solid var(--color-brand-700)",
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
     borderRadius: "999px",
     padding: "8px 12px",
     cursor: "pointer",
@@ -953,6 +1040,39 @@ const styles = {
     alignContent: "flex-start",
     gap: "8px",
   },
+  poolCategoryGrid: {
+    display: "flex",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: "16px",
+    alignItems: "flex-start",
+    width: "100%",
+    boxSizing: "border-box",
+  },
+  poolCategoryColumn: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "8px",
+    maxWidth: "100%",
+  },
+  poolCategoryHeading: {
+    fontSize: "11px",
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    color: "var(--color-subtext-color)",
+    margin: 0,
+    paddingBottom: "2px",
+    borderBottom: "1px solid var(--color-neutral-200)",
+    alignSelf: "stretch",
+  },
+  chipColumnStack: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: "8px",
+  },
   chipListColumn: {
     display: "flex",
     flexDirection: "column",
@@ -963,67 +1083,52 @@ const styles = {
   sectionLabel: {
     margin: "0 0 8px",
     fontSize: "14px",
-    color: "#334155",
+    color: "var(--color-neutral-700)",
     fontWeight: 600,
   },
   smallText: {
     margin: 0,
     fontSize: "14px",
-    color: "#475569",
+    color: "var(--color-neutral-600)",
   },
   badge: {
     display: "inline-block",
     fontSize: "12px",
-    background: "#e2e8f0",
-    color: "#0f172a",
+    background: "var(--color-brand-100)",
+    color: "var(--color-brand-900)",
     borderRadius: "999px",
     padding: "4px 8px",
     marginLeft: "8px",
   },
   select: {
     width: "100%",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--color-neutral-300)",
     borderRadius: "14px",
     padding: "10px 12px",
     fontSize: "14px",
-    background: "white",
+    background: "var(--color-neutral-0)",
     marginBottom: "10px",
   },
   textArea: {
     width: "100%",
     minHeight: "120px",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--color-neutral-300)",
     borderRadius: "14px",
     padding: "10px 12px",
     fontSize: "14px",
+    color: "var(--color-default-font)",
     resize: "vertical",
     marginBottom: "10px",
   },
   scoreRow: {
-    border: "1px solid #e2e8f0",
+    border: "1px solid var(--color-neutral-200)",
     borderRadius: "18px",
     padding: "14px",
     marginBottom: "12px",
   },
-  staplesList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    marginBottom: "12px",
-  },
-  stapleRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    flexWrap: "wrap",
-    background: "#f8fafc",
-    border: "1px solid #e2e8f0",
-    borderRadius: "12px",
-    padding: "8px 10px",
-  },
   stapleOrderBtn: {
-    border: "1px solid #cbd5e1",
-    background: "white",
+    border: "1px solid var(--color-neutral-300)",
+    background: "var(--color-neutral-0)",
     borderRadius: "8px",
     width: "32px",
     height: "28px",
@@ -1032,43 +1137,45 @@ const styles = {
     fontSize: "13px",
     lineHeight: 1,
   },
-  mealFitDetails: {
-    marginBottom: "16px",
-    border: "1px solid #e2e8f0",
-    borderRadius: "16px",
-    padding: "12px 14px",
-    background: "#fafafa",
-  },
-  mealFitTableWrap: {
-    maxHeight: "240px",
-    overflowY: "auto",
-    marginTop: "10px",
-  },
-  mealFitTable: {
-    width: "100%",
-    borderCollapse: "collapse",
-    fontSize: "12px",
-  },
-  mealFitTh: {
-    textAlign: "left",
-    padding: "6px 8px",
-    borderBottom: "1px solid #e2e8f0",
-    color: "#64748b",
-    fontWeight: 600,
-  },
-  mealFitTd: {
-    padding: "6px 8px",
-    borderBottom: "1px solid #f1f5f9",
-    verticalAlign: "middle",
-  },
   mealFitSelect: {
     width: "100%",
     maxWidth: "72px",
-    border: "1px solid #cbd5e1",
+    border: "1px solid var(--color-neutral-300)",
     borderRadius: "8px",
     padding: "4px 6px",
     fontSize: "12px",
-    background: "white",
+    background: "var(--color-neutral-0)",
+  },
+  mealFitEditBtn: {
+    border: "none",
+    background: "var(--color-neutral-100)",
+    borderRadius: "8px",
+    width: "30px",
+    height: "28px",
+    padding: 0,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "var(--color-neutral-600)",
+  },
+  chipPillEditBtn: {
+    border: "none",
+    borderLeft: "1px solid var(--color-neutral-200)",
+    margin: 0,
+    padding: "0 8px",
+    cursor: "pointer",
+    background: "var(--color-neutral-0)",
+    color: "var(--color-neutral-600)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  chipPillEditBtnInPool: {
+    background: "var(--color-brand-700)",
+    color: "var(--color-neutral-0)",
+    borderLeftColor: "rgba(255, 255, 255, 0.25)",
   },
 };
 
@@ -1113,6 +1220,10 @@ export default function ToddlerMenuPlannerPrototype() {
   const [manualSlot, setManualSlot] = useState(null);
   /** Meal override: ordered food ids from pool, max MAX_FOODS_PER_CELL */
   const [manualFoodIds, setManualFoodIds] = useState([]);
+  const [editFoodId, setEditFoodId] = useState(null);
+  const [editFoodName, setEditFoodName] = useState("");
+  const [editFoodCategory, setEditFoodCategory] = useState("misc");
+  const [editFoodError, setEditFoodError] = useState("");
   const [successNote, setSuccessNote] = useState(() => {
     const weekKey = formatLocalDateKey(startOfWeekSunday(new Date()));
     const saved = loadSavedWeeksFromStorage();
@@ -1471,9 +1582,19 @@ export default function ToddlerMenuPlannerPrototype() {
       .sort((a, b) => b.score - a.score);
   }, [selectedCatalog, inventory, history, priorityBoost, mealFitOverrides]);
 
-  const stapleAddOptions = useMemo(
-    () => selectedCatalog.filter((c) => !breakfastStapleIds.includes(c.id)),
-    [selectedCatalog, breakfastStapleIds]
+  const editFoodCatalogItem = useMemo(() => {
+    if (!editFoodId) return null;
+    return catalog.find((c) => c.id === editFoodId) ?? null;
+  }, [editFoodId, catalog]);
+
+  const editFoodStapleIndex = useMemo(() => {
+    if (!editFoodId) return -1;
+    return breakfastStapleIds.indexOf(editFoodId);
+  }, [editFoodId, breakfastStapleIds]);
+
+  const editFoodInPool = useMemo(
+    () => (editFoodId ? selectedIds.includes(editFoodId) : false),
+    [editFoodId, selectedIds]
   );
 
   const thisCalendarWeekKey = formatLocalDateKey(startOfWeekSunday(new Date()));
@@ -1575,10 +1696,6 @@ export default function ToddlerMenuPlannerPrototype() {
     );
   };
 
-  const removeFromSelected = (id) => {
-    setSelectedIds((current) => current.filter((itemId) => itemId !== id));
-  };
-
   const addBreakfastStaple = (id) => {
     if (!id || breakfastStapleIds.length >= MAX_FOODS_PER_CELL) return;
     if (breakfastStapleIds.includes(id)) return;
@@ -1615,7 +1732,7 @@ export default function ToddlerMenuPlannerPrototype() {
   const addFood = () => {
     const cleaned = draftFood.trim();
     if (!cleaned) return;
-    const id = cleaned.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const id = slugIdFromFoodName(cleaned);
     const category = normalizeFoodCategory(draftFoodCategory);
     if (catalog.some((item) => item.id === id)) {
       setSelectedIds((current) => (current.includes(id) ? current : [...current, id]));
@@ -1636,6 +1753,156 @@ export default function ToddlerMenuPlannerPrototype() {
     setSelectedIds((current) => [...current, id]);
     setDraftFood("");
     setDraftFoodCategory("misc");
+  };
+
+  const openEditFood = (item) => {
+    setEditFoodId(item.id);
+    setEditFoodName(item.name);
+    setEditFoodCategory(item.category ?? "misc");
+    setEditFoodError("");
+  };
+
+  const cancelEditFood = useCallback(() => {
+    setEditFoodId(null);
+    setEditFoodName("");
+    setEditFoodCategory("misc");
+    setEditFoodError("");
+  }, []);
+
+  const saveEditFood = () => {
+    if (!editFoodId) return;
+    const oldId = editFoodId;
+    const name = editFoodName.trim();
+    if (!name) {
+      setEditFoodError("Name cannot be empty.");
+      return;
+    }
+    const newId = slugIdFromFoodName(name);
+    if (!newId) {
+      setEditFoodError("Name needs at least one letter or number.");
+      return;
+    }
+    const category = normalizeFoodCategory(editFoodCategory);
+    if (catalog.some((c) => c.id === newId && c.id !== oldId)) {
+      setEditFoodError("Another food already uses that name.");
+      return;
+    }
+    const catalogAfter = catalog.map((c) =>
+      c.id === oldId ? { ...c, id: newId, name, category } : c
+    );
+    const idMap = oldId !== newId ? { [oldId]: newId } : {};
+
+    setCatalog(catalogAfter);
+    if (Object.keys(idMap).length > 0) {
+      setInventory((inv) => inv.map((r) => ({ ...r, itemId: idMap[r.itemId] ?? r.itemId })));
+      setHistory((h) => {
+        const next = { ...h };
+        if (oldId in next) {
+          next[newId] = next[oldId];
+          delete next[oldId];
+        }
+        return next;
+      });
+      setSelectedIds((ids) => ids.map((id) => idMap[id] ?? id));
+      setBreakfastStapleIds((ids) => ids.map((id) => idMap[id] ?? id));
+      setManualFoodIds((ids) => ids.map((id) => idMap[id] ?? id));
+      setPriorityBoost((prev) => {
+        const next = { ...prev };
+        for (const [from, to] of Object.entries(idMap)) {
+          if (from in next) {
+            next[to] = next[from];
+            delete next[from];
+          }
+        }
+        return next;
+      });
+      setMealFitOverrides((prev) => {
+        const next = { ...prev };
+        for (const [from, to] of Object.entries(idMap)) {
+          if (from in next) {
+            next[to] = next[from];
+            delete next[from];
+          }
+        }
+        return next;
+      });
+    }
+    setWeekPlan((wp) => remapWeekPlanFoodIdsAndLabels(wp, idMap, catalogAfter));
+    setSavedWeeks((sw) => {
+      const out = { ...sw };
+      for (const k of Object.keys(out)) {
+        const e = out[k];
+        if (e && Array.isArray(e.weekPlan)) {
+          out[k] = { ...e, weekPlan: remapWeekPlanFoodIdsAndLabels(e.weekPlan, idMap, catalogAfter) };
+        }
+      }
+      return out;
+    });
+    cancelEditFood();
+  };
+
+  const renderPoolChipPill = (item, inPool) => {
+    const p = priorityBoost[item.id] ?? 0;
+    return (
+      <div
+        key={item.id}
+        style={{
+          ...styles.chipPill,
+          ...(inPool ? styles.chipPillInPool : {}),
+        }}
+      >
+        <button
+          type="button"
+          style={{
+            ...styles.chipPillEnd,
+            ...(inPool ? styles.chipPillEndInPool : {}),
+          }}
+          onClick={() => adjustPriority(item.id, -1)}
+          aria-label={`Lower use priority for ${item.name}`}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          style={{
+            ...styles.chipPillCenter,
+            ...(inPool ? styles.chipPillCenterInPool : {}),
+          }}
+          onClick={() => toggleChip(item.id)}
+          title={p !== 0 ? `${item.name} (priority ${p > 0 ? "+" : ""}${p})` : item.name}
+          aria-label={
+            inPool ? `Remove ${item.name} from this week's pool` : `Add ${item.name} to this week's pool`
+          }
+        >
+          <span style={styles.chipPillCenterLabel}>{item.name}</span>
+          {p !== 0 ? (
+            <span style={styles.chipPillPriorityHint}>· {p > 0 ? `+${p}` : p}</span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          style={{
+            ...styles.chipPillEnd,
+            ...(inPool ? styles.chipPillEndInPool : {}),
+          }}
+          onClick={() => adjustPriority(item.id, 1)}
+          aria-label={`Raise use priority for ${item.name}`}
+        >
+          +
+        </button>
+        <button
+          type="button"
+          style={{
+            ...styles.chipPillEditBtn,
+            ...(inPool ? styles.chipPillEditBtnInPool : {}),
+          }}
+          onClick={() => openEditFood(item)}
+          aria-label={`Edit ${item.name}`}
+        >
+          <Pencil size={14} strokeWidth={2} aria-hidden />
+        </button>
+      </div>
+    );
   };
 
   const applyManualSlotOverride = () => {
@@ -1679,6 +1946,15 @@ export default function ToddlerMenuPlannerPrototype() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [manualSlot, cancelManualSlot]);
+
+  useEffect(() => {
+    if (!editFoodId) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") cancelEditFood();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editFoodId, cancelEditFood]);
 
   const saveReflectionToWeek = () => {
     persistCurrentWeekSnapshot();
@@ -1788,7 +2064,14 @@ export default function ToddlerMenuPlannerPrototype() {
   if (supabaseConfigured && session && !cloudSyncReady) {
     return (
       <div style={styles.page}>
-        <p style={{ textAlign: "center", padding: "48px", color: "#64748b", fontSize: "16px" }}>
+        <p
+          style={{
+            textAlign: "center",
+            padding: "48px",
+            color: "var(--color-subtext-color)",
+            fontSize: "16px",
+          }}
+        >
           Loading your planner…
         </p>
       </div>
@@ -1828,12 +2111,7 @@ export default function ToddlerMenuPlannerPrototype() {
         {activeTab === "planner" && (
           <div style={styles.grid}>
             <div style={styles.card}>
-              <h2 style={styles.cardTitle}>
-                {formatWeekRangeLabel(activeWeekStartKey)}
-                {isViewingThisCalendarWeek ? (
-                  <span style={{ ...styles.badge, marginLeft: "10px" }}>This week</span>
-                ) : null}
-              </h2>
+              <h2 style={styles.cardTitle}>{formatWeekRangeLabel(activeWeekStartKey)}</h2>
               <div style={styles.weekNav}>
                 <button
                   type="button"
@@ -1843,7 +2121,6 @@ export default function ToddlerMenuPlannerPrototype() {
                 >
                   ‹ Prev
                 </button>
-                <span style={styles.weekNavLabel}>{formatWeekRangeLabel(activeWeekStartKey)}</span>
                 <button
                   type="button"
                   style={styles.weekNavBtn}
@@ -1854,9 +2131,12 @@ export default function ToddlerMenuPlannerPrototype() {
                 </button>
                 <button
                   type="button"
-                  style={styles.weekNavBtn}
+                  style={{
+                    ...styles.weekNavBtn,
+                    ...(isViewingThisCalendarWeek ? styles.weekNavBtnActive : {}),
+                  }}
                   onClick={() => navigateToWeek(thisCalendarWeekKey)}
-                  disabled={isViewingThisCalendarWeek}
+                  aria-current={isViewingThisCalendarWeek ? "true" : undefined}
                 >
                   This week
                 </button>
@@ -1956,142 +2236,88 @@ export default function ToddlerMenuPlannerPrototype() {
                   ))}
                 </div>
               </div>
-            </div>
 
-            <div style={styles.card}>
-              <h2 style={styles.cardTitle}>Food pool &amp; priorities</h2>
-              <p style={{ ...styles.smallText, marginTop: "-8px", marginBottom: "16px" }}>
-                Each food has exactly one category (Fruits, Vegetables, Grains, Protein, Dairy, Sweets, Misc.). New foods
-                need a category before you add. <strong>Foods you add</strong>, this week&apos;s chip selection, inventory
-                rows, and &quot;last served&quot; values{" "}
+              <div
+                style={{
+                  marginTop: "28px",
+                  paddingTop: "24px",
+                  borderTop: "1px solid var(--color-neutral-border)",
+                }}
+              >
+              <h3
+                style={{
+                  margin: "0 0 8px",
+                  fontSize: "18px",
+                  fontWeight: 600,
+                  fontFamily: "var(--font-heading-2), ui-sans-serif, system-ui, sans-serif",
+                  color: "var(--color-default-font)",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                This week&apos;s foods
+              </h3>
+              <p style={{ ...styles.smallText, marginTop: 0, marginBottom: "16px" }}>
+                <strong>In this week&apos;s pool</strong> — tap the center of a pill to include or exclude; <strong>−</strong> and{" "}
+                <strong>+</strong> nudge planner priority for the week; pencil opens the editor (name, category, breakfast
+                staple, meal-fit nudges).{" "}
+                <strong>Not in this week</strong> — tap the center to add to the pool. Inventory and &quot;last served&quot;{" "}
                 {supabaseConfigured && session
-                  ? "sync to your account when signed in (this browser still saves a local copy)."
-                  : "are saved in this browser (same as weeks below)."}{" "}
-                Tap chips to include or exclude from this week; use − / + for planner priority.
+                  ? "sync when signed in (this browser keeps a copy)."
+                  : "stay in this browser."}
               </p>
 
-              <p style={styles.sectionLabel}>Breakfast staples (same lineup every day)</p>
-              <p style={{ ...styles.smallText, marginTop: "-4px", marginBottom: "10px" }}>
-                Put foods in order (e.g. puree → cereal → yogurt). Auto-fill uses them in every breakfast cell first when
-                they&apos;re in your pool and have inventory; extra breakfast slots fill from the usual picker. Meal fit
-                scores below softly nudge lunch/dinner (never a hard ban).
-              </p>
-              <div style={styles.staplesList}>
-                {breakfastStapleIds.length === 0 ? (
-                  <p style={{ ...styles.smallText, margin: 0 }}>None — breakfast is chosen like lunch/dinner.</p>
+              <p style={styles.sectionLabel}>In this week&apos;s pool</p>
+              <div style={styles.chipListColumn}>
+                {catalogChipsSelected.length === 0 ? (
+                  <p style={{ ...styles.smallText, margin: "0 0 16px" }}>
+                    None yet — add foods from <strong>Not in this week</strong> below.
+                  </p>
                 ) : (
-                  breakfastStapleIds.map((sid, index) => {
-                    const food = catalog.find((c) => c.id === sid);
-                    return (
-                      <div key={`${sid}-${index}`} style={styles.stapleRow}>
-                        <span style={{ flex: 1, fontSize: "14px", fontWeight: 500 }}>{food?.name ?? sid}</span>
-                        <button
-                          type="button"
-                          style={styles.stapleOrderBtn}
-                          onClick={() => moveBreakfastStaple(index, -1)}
-                          disabled={index === 0}
-                          aria-label="Move up"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          style={styles.stapleOrderBtn}
-                          onClick={() => moveBreakfastStaple(index, 1)}
-                          disabled={index === breakfastStapleIds.length - 1}
-                          aria-label="Move down"
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          style={styles.matrixIconBtn}
-                          onClick={() => removeBreakfastStapleAt(index)}
-                          aria-label={`Remove ${food?.name ?? sid} from staples`}
-                        >
-                          ×
-                        </button>
+                  <div
+                    style={styles.poolCategoryGrid}
+                    aria-label="Foods in this week's pool, by category"
+                  >
+                    {groupCatalogByCategoryOrdered(catalogChipsSelected).map(({ category, items }) => (
+                      <div key={category.id} style={styles.poolCategoryColumn}>
+                        <p style={styles.poolCategoryHeading}>{category.label}</p>
+                        <div style={styles.chipColumnStack}>
+                          {items.map((item) => renderPoolChipPill(item, true))}
+                        </div>
                       </div>
-                    );
-                  })
+                    ))}
+                  </div>
                 )}
               </div>
-              <div style={{ ...styles.inputRow, marginBottom: "16px" }}>
-                <select
-                  value=""
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v) addBreakfastStaple(v);
-                  }}
-                  style={{ ...styles.select, flex: "1 1 220px", marginBottom: 0 }}
-                  aria-label="Add breakfast staple from pool"
-                  disabled={
-                    breakfastStapleIds.length >= MAX_FOODS_PER_CELL || stapleAddOptions.length === 0
-                  }
-                >
-                  <option value="">
-                    {stapleAddOptions.length === 0 ? "All pool foods already in staples" : "Add staple from pool…"}
-                  </option>
-                  {stapleAddOptions.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
 
-              <details style={styles.mealFitDetails}>
-                <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: "14px", color: "#334155" }}>
-                  Meal fit scores (−3…+3 per meal, soft only)
-                </summary>
-                <p style={{ ...styles.smallText, marginTop: "10px", marginBottom: 0 }}>
-                  Higher = more likely to be picked for that meal; negative = less likely, but still possible. Applies to
-                  auto-fill and refresh; staples + manual overrides ignore this for those slots.
-                </p>
-                <div style={styles.mealFitTableWrap}>
-                  <table style={styles.mealFitTable}>
-                    <thead>
-                      <tr>
-                        <th style={styles.mealFitTh}>Food</th>
-                        {MEALS.map((m) => (
-                          <th key={m} style={styles.mealFitTh}>
-                            {m === "Breakfast" ? "Brk" : m === "Lunch" ? "Lun" : "Din"}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {catalog.map((item) => (
-                        <tr key={item.id}>
-                          <td style={styles.mealFitTd}>{item.name}</td>
-                          {MEALS.map((m) => (
-                            <td key={m} style={styles.mealFitTd}>
-                              <select
-                                value={effectiveMealFit(mealFitOverrides, item, m)}
-                                onChange={(e) => setMealFitValue(item.id, m, Number(e.target.value))}
-                                style={styles.mealFitSelect}
-                                aria-label={`${item.name} fit for ${m}`}
-                              >
-                                {MEAL_FIT_SELECT_LEVELS.map((lv) => (
-                                  <option key={lv} value={lv}>
-                                    {lv > 0 ? `+${lv}` : String(lv)}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </details>
+              {catalogChipsUnselected.length > 0 ? (
+                <>
+                  <p style={{ ...styles.sectionLabel, marginTop: "20px" }}>Not in this week</p>
+                  <div
+                    style={styles.poolCategoryGrid}
+                    aria-label="Foods not in this week's pool, by category"
+                  >
+                    {groupCatalogByCategoryOrdered(catalogChipsUnselected).map(({ category, items }) => (
+                      <div key={`out-${category.id}`} style={styles.poolCategoryColumn}>
+                        <p style={styles.poolCategoryHeading}>{category.label}</p>
+                        <div style={styles.chipColumnStack}>
+                          {items.map((item) => renderPoolChipPill(item, false))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
 
-              <div style={styles.inputRow}>
+              <p style={{ ...styles.sectionLabel, marginTop: "24px" }}>Add a new food</p>
+              <p style={{ ...styles.smallText, marginTop: "-4px", marginBottom: "10px" }}>
+                Pick a category, name it, then <strong>Add</strong>. It joins your catalog and this week&apos;s pool; if that
+                name already exists, it&apos;s just added to the pool.
+              </p>
+              <div style={{ ...styles.inputRow, marginBottom: "4px" }}>
                 <input
                   value={draftFood}
                   onChange={(e) => setDraftFood(e.target.value)}
-                  placeholder="Add a new food"
+                  placeholder="Food name"
                   style={styles.input}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") addFood();
@@ -2109,85 +2335,13 @@ export default function ToddlerMenuPlannerPrototype() {
                     </option>
                   ))}
                 </select>
-                <button onClick={addFood} className="border border-slate-300 bg-white rounded-xl px-3 py-2 text-sm">
+                <button
+                  type="button"
+                  onClick={addFood}
+                  className="rounded-xl border border-neutral-300 bg-neutral-0 px-3 py-2 text-sm text-default-font"
+                >
                   Add
                 </button>
-              </div>
-
-              <p style={styles.sectionLabel}>In this week&apos;s pool (tap × to remove)</p>
-              <div style={styles.dashedBox}>
-                {selectedCatalog.map((item) => (
-                  <button key={item.id} type="button" onClick={() => removeFromSelected(item.id)} style={styles.chip}>
-                    {item.name} ×
-                  </button>
-                ))}
-              </div>
-
-              <p style={styles.sectionLabel}>Tap to add or remove · − / + priority</p>
-              <div style={styles.chipListColumn}>
-                <div style={styles.chipRow} aria-label="Foods in this week's pool">
-                  {catalogChipsSelected.map((item) => {
-                    const p = priorityBoost[item.id] ?? 0;
-                    return (
-                      <div key={item.id} style={styles.chipWithPriority}>
-                        <button
-                          type="button"
-                          style={styles.priorityBtn}
-                          onClick={() => adjustPriority(item.id, -1)}
-                          aria-label={`Lower use priority for ${item.name}`}
-                        >
-                          −
-                        </button>
-                        <button type="button" onClick={() => toggleChip(item.id)} style={styles.chipSelected}>
-                          {item.name}
-                        </button>
-                        <button
-                          type="button"
-                          style={styles.priorityBtn}
-                          onClick={() => adjustPriority(item.id, 1)}
-                          aria-label={`Raise use priority for ${item.name}`}
-                        >
-                          +
-                        </button>
-                        {p !== 0 ? <span style={styles.priorityBadge}>{p > 0 ? `+${p}` : p}</span> : null}
-                      </div>
-                    );
-                  })}
-                </div>
-                {catalogChipsUnselected.length > 0 ? (
-                  <>
-                    <p style={{ ...styles.sectionLabel, margin: 0 }}>Not in this week</p>
-                    <div style={styles.chipRow} aria-label="Foods not in this week's pool">
-                      {catalogChipsUnselected.map((item) => {
-                        const p = priorityBoost[item.id] ?? 0;
-                        return (
-                          <div key={item.id} style={styles.chipWithPriority}>
-                            <button
-                              type="button"
-                              style={styles.priorityBtn}
-                              onClick={() => adjustPriority(item.id, -1)}
-                              aria-label={`Lower use priority for ${item.name}`}
-                            >
-                              −
-                            </button>
-                            <button type="button" onClick={() => toggleChip(item.id)} style={styles.chip}>
-                              {item.name}
-                            </button>
-                            <button
-                              type="button"
-                              style={styles.priorityBtn}
-                              onClick={() => adjustPriority(item.id, 1)}
-                              aria-label={`Raise use priority for ${item.name}`}
-                            >
-                              +
-                            </button>
-                            {p !== 0 ? <span style={styles.priorityBadge}>{p > 0 ? `+${p}` : p}</span> : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                ) : null}
               </div>
 
               <p style={{ ...styles.sectionLabel, marginTop: "20px" }}>Weekly reflection</p>
@@ -2203,6 +2357,7 @@ export default function ToddlerMenuPlannerPrototype() {
               <button type="button" onClick={saveReflectionToWeek} style={{ ...styles.button, width: "100%" }}>
                 Save note now
               </button>
+              </div>
             </div>
           </div>
         )}
@@ -2321,14 +2476,14 @@ export default function ToddlerMenuPlannerPrototype() {
               </p>
               <p style={{ ...styles.sectionLabel, marginTop: 0, marginBottom: "8px" }}>Foods from your pool</p>
               <p style={{ ...styles.smallText, marginTop: 0, marginBottom: "10px" }}>
-                Pick up to <strong>{MAX_FOODS_PER_CELL}</strong> for this meal ({manualFoodIds.length} selected). Order matches
-                how you check them.
+                Pick up to <strong>{MAX_FOODS_PER_CELL}</strong> for this meal ({manualFoodIds.length} selected). Selected foods
+                stay at the top; meal order matches how you check them.
               </p>
               <div style={styles.modalFoodList} role="group" aria-label="Foods in pool for this meal">
                 {selectedCatalog.length === 0 ? (
                   <p style={{ ...styles.smallText, margin: "12px", textAlign: "center" }}>No foods in your pool. Add foods below first.</p>
                 ) : (
-                  selectedCatalog.map((item) => {
+                  catalogOrderedForOverrideModal(selectedCatalog, manualFoodIds).map((item) => {
                     const checked = manualFoodIds.includes(item.id);
                     const atMax = manualFoodIds.length >= MAX_FOODS_PER_CELL;
                     const disabled = !checked && atMax;
@@ -2363,6 +2518,227 @@ export default function ToddlerMenuPlannerPrototype() {
                   disabled={manualFoodIds.length === 0}
                 >
                   Apply to slot
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {editFoodId ? (
+          <div style={styles.modalBackdrop} onClick={cancelEditFood} role="presentation">
+            <div
+              style={{ ...styles.modalPanel, maxWidth: "min(100%, 520px)" }}
+              onClick={(e) => e.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="edit-food-modal-title"
+            >
+              <button
+                type="button"
+                style={styles.modalCloseBtn}
+                onClick={cancelEditFood}
+                aria-label="Close"
+              >
+                <X size={18} strokeWidth={2} aria-hidden />
+              </button>
+              <h2 id="edit-food-modal-title" style={styles.modalTitle}>
+                Edit food
+              </h2>
+              <p style={styles.modalSubtitle}>
+                Name, category, breakfast staple lineup, and per-meal fit nudges. Renaming updates the internal id everywhere
+                (planner, inventory, history, staples, saved weeks). Staple and meal-fit changes apply as soon as you adjust
+                them; use <strong>Save</strong> for name and category only.
+              </p>
+              <label style={{ ...styles.sectionLabel, display: "block", marginBottom: "6px" }} htmlFor="edit-food-name">
+                Name
+              </label>
+              <input
+                id="edit-food-name"
+                value={editFoodName}
+                onChange={(e) => {
+                  setEditFoodName(e.target.value);
+                  setEditFoodError("");
+                }}
+                style={{ ...styles.input, width: "100%", boxSizing: "border-box", marginBottom: "12px" }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveEditFood();
+                }}
+              />
+              <label style={{ ...styles.sectionLabel, display: "block", marginBottom: "6px" }} htmlFor="edit-food-category">
+                Category
+              </label>
+              <select
+                id="edit-food-category"
+                value={editFoodCategory}
+                onChange={(e) => {
+                  setEditFoodCategory(e.target.value);
+                  setEditFoodError("");
+                }}
+                style={{ ...styles.select, width: "100%", boxSizing: "border-box", marginBottom: "12px" }}
+                aria-label="Category for food"
+              >
+                {FOOD_CATEGORIES.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+
+              <div
+                style={{
+                  marginTop: "18px",
+                  paddingTop: "16px",
+                  borderTop: "1px solid var(--color-neutral-200)",
+                }}
+              >
+                <p style={styles.sectionLabel}>Breakfast staple</p>
+                <p style={{ ...styles.smallText, marginTop: "-4px", marginBottom: "10px" }}>
+                  When this food is in your pool, breakfast auto-fill uses staples first (in order). Reorder with ↑ ↓; edit
+                  other foods to move them in the lineup too.
+                </p>
+                {editFoodStapleIndex >= 0 ? (
+                  <>
+                    <p style={{ ...styles.smallText, marginTop: 0, marginBottom: "10px" }}>
+                      In lineup — position {editFoodStapleIndex + 1} of {breakfastStapleIds.length}.
+                      {!editFoodInPool ? (
+                        <>
+                          {" "}
+                          <strong>Not in this week&apos;s pool</strong> — add it to the pool for breakfast fill to use this
+                          staple.
+                        </>
+                      ) : null}
+                    </p>
+                    <div style={{ ...styles.inputRow, marginBottom: 0 }}>
+                      <button
+                        type="button"
+                        style={styles.stapleOrderBtn}
+                        onClick={() => moveBreakfastStaple(editFoodStapleIndex, -1)}
+                        disabled={editFoodStapleIndex === 0}
+                        aria-label="Move staple up in order"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        type="button"
+                        style={styles.stapleOrderBtn}
+                        onClick={() => moveBreakfastStaple(editFoodStapleIndex, 1)}
+                        disabled={editFoodStapleIndex === breakfastStapleIds.length - 1}
+                        aria-label="Move staple down in order"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...styles.button, flex: "1 1 auto", minWidth: "140px" }}
+                        onClick={() => removeBreakfastStapleAt(editFoodStapleIndex)}
+                      >
+                        Remove from staples
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      style={styles.button}
+                      onClick={() => addBreakfastStaple(editFoodId)}
+                      disabled={
+                        breakfastStapleIds.length >= MAX_FOODS_PER_CELL || breakfastStapleIds.includes(editFoodId)
+                      }
+                    >
+                      Add to breakfast staples
+                    </button>
+                    {breakfastStapleIds.length >= MAX_FOODS_PER_CELL ? (
+                      <p style={{ ...styles.smallText, marginTop: "10px", marginBottom: 0 }}>
+                        Staple list is full ({MAX_FOODS_PER_CELL} max). Remove a staple from another food&apos;s editor.
+                      </p>
+                    ) : null}
+                    {!editFoodInPool ? (
+                      <p style={{ ...styles.smallText, marginTop: "10px", marginBottom: 0 }}>
+                        Tip: add this food to <strong>this week&apos;s pool</strong> so breakfast auto-fill can use it.
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+
+              <div
+                style={{
+                  marginTop: "18px",
+                  paddingTop: "16px",
+                  borderTop: "1px solid var(--color-neutral-200)",
+                }}
+              >
+                <p style={styles.sectionLabel}>Meal fit (−3…+3)</p>
+                <p style={{ ...styles.smallText, marginTop: "-4px", marginBottom: "10px" }}>
+                  Soft score nudge for auto-fill and refresh. Negative = less likely; still possible. Ignored for staple slots
+                  and manual meal overrides.
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "12px 16px",
+                    alignItems: "flex-end",
+                  }}
+                >
+                  {MEALS.map((m) => {
+                    const itemForFit = editFoodCatalogItem ?? { id: editFoodId };
+                    const short =
+                      m === "Breakfast" ? "Brk" : m === "Lunch" ? "Lun" : "Din";
+                    return (
+                      <div
+                        key={m}
+                        style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: "76px" }}
+                      >
+                        <label
+                          style={{
+                            fontSize: "12px",
+                            fontWeight: 600,
+                            color: "var(--color-subtext-color)",
+                          }}
+                          htmlFor={`edit-meal-fit-${editFoodId}-${m}`}
+                        >
+                          {short}
+                        </label>
+                        <select
+                          id={`edit-meal-fit-${editFoodId}-${m}`}
+                          value={effectiveMealFit(mealFitOverrides, itemForFit, m)}
+                          onChange={(e) => setMealFitValue(editFoodId, m, Number(e.target.value))}
+                          style={styles.mealFitSelect}
+                          aria-label={`${editFoodName || "Food"} fit for ${m}`}
+                        >
+                          {MEAL_FIT_SELECT_LEVELS.map((lv) => (
+                            <option key={lv} value={lv}>
+                              {lv > 0 ? `+${lv}` : String(lv)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {editFoodError ? (
+                <p style={{ ...styles.smallText, color: "var(--color-danger-600, #b91c1c)", margin: "12px 0 0" }}>
+                  {editFoodError}
+                </p>
+              ) : null}
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  flexWrap: "wrap",
+                  justifyContent: "flex-end",
+                  marginTop: "20px",
+                }}
+              >
+                <button type="button" onClick={cancelEditFood} style={styles.button}>
+                  Close
+                </button>
+                <button type="button" onClick={saveEditFood} style={styles.buttonPrimary}>
+                  Save name &amp; category
                 </button>
               </div>
             </div>

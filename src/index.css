@@ -1,55 +1,60 @@
 @import "tailwindcss";
 
+/* Design tokens — utilities: text-default-font, bg-brand-700, border-neutral-200, etc. */
+@theme {
+  --font-caption: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-caption-bold: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-body-bold: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading-3: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading-2: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading-1: "Work Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-monospace-body: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --shadow-tm-sm: 0px 1px 2px 0px rgb(0 0 0 / 0.05);
+  --shadow-tm-md:
+    0px 4px 16px -2px rgb(0 0 0 / 0.08), 0px 2px 4px -1px rgb(0 0 0 / 0.08);
+  --shadow-tm-lg:
+    0px 12px 32px -4px rgb(0 0 0 / 0.08), 0px 4px 8px -2px rgb(0 0 0 / 0.08);
+
+  --color-brand-primary: rgb(2 132 199);
+  --color-default-font: rgb(28 25 23);
+  --color-subtext-color: rgb(120 113 108);
+  --color-neutral-border: rgb(231 229 228);
+  --color-neutral-0: rgb(255 255 255);
+  --color-neutral-50: rgb(250 250 249);
+  --color-neutral-100: rgb(245 245 244);
+  --color-neutral-200: rgb(231 229 228);
+  --color-neutral-300: rgb(214 211 209);
+  --color-neutral-400: rgb(168 162 158);
+  --color-neutral-500: rgb(120 113 108);
+  --color-neutral-600: rgb(87 83 78);
+  --color-neutral-700: rgb(68 64 60);
+  --color-neutral-800: rgb(41 37 36);
+  --color-neutral-900: rgb(28 25 23);
+  --color-neutral-950: rgb(12 10 9);
+  --color-brand-50: rgb(240 249 255);
+  --color-brand-100: rgb(224 242 254);
+  --color-brand-200: rgb(186 230 253);
+  --color-brand-300: rgb(125 211 252);
+  --color-brand-400: rgb(56 189 248);
+  --color-brand-500: rgb(14 165 233);
+  --color-brand-600: rgb(2 132 199);
+  --color-brand-700: rgb(3 105 161);
+  --color-brand-800: rgb(7 89 133);
+  --color-brand-900: rgb(12 74 110);
+  --color-error-600: rgb(220 38 38);
+}
+
+/* App is light-first: headings stay dark (global h2 was washing out under OS dark mode). */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
-
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  color-scheme: light;
+  font-family: var(--font-body);
+  color: var(--color-default-font);
+  background: var(--color-neutral-50);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
 }
 
 body {
@@ -68,46 +73,6 @@ body {
   box-sizing: border-box;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
 p {
   margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }
